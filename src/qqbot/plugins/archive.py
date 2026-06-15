@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 from nonebot import get_driver, on_message
@@ -8,6 +10,7 @@ from nonebot.log import logger
 from starlette.responses import HTMLResponse
 
 from qqbot.config import load_config
+from qqbot.onebot_api import OneBotHttpClient
 from qqbot.reactions import ReactionEngine
 from qqbot.storage import ArchivedMessage, MessageStore, utc_now
 
@@ -15,6 +18,11 @@ from qqbot.storage import ArchivedMessage, MessageStore, utc_now
 config = load_config()
 store = MessageStore(config.db_path)
 engine = ReactionEngine(config, store)
+onebot_http = OneBotHttpClient(
+    config.onebot_http_url,
+    config.onebot_http_access_token,
+    config.onebot_http_timeout,
+)
 driver = get_driver()
 
 
@@ -54,6 +62,8 @@ if hasattr(driver, "server_app"):
             "db_path": str(config.db_path),
             "group_mode": config.group_mode,
             "webhook_enabled": bool(config.reaction_webhook),
+            "onebot_http_enabled": onebot_http.enabled,
+            "expand_forward_messages": config.expand_forward_messages,
             "rules": len(config.rules),
         }
 
@@ -74,12 +84,18 @@ if hasattr(driver, "server_app"):
     async def ingest_http_event(payload: dict[str, Any]) -> dict[str, Any]:
         archived = _archive_event_payload(payload)
         row_id = await store.save_message(archived)
+        expanded_count = await _expand_and_store_forward_messages(payload, archived.message_id, row_id)
         reactions = await engine.evaluate(archived, HttpEventContext(payload))
         returned = []
         for reaction in reactions:
             returned.append({"name": reaction.name, "reply": reaction.reply, "source": reaction.source})
             await store.save_reaction(row_id, reaction.name, "reply", "returned", response=reaction.reply)
-        return {"ok": True, "message_row_id": row_id, "reactions": returned}
+        return {
+            "ok": True,
+            "message_row_id": row_id,
+            "forward_messages": expanded_count,
+            "reactions": returned,
+        }
 
     @app.post("/")
     async def ingest_root(payload: dict[str, Any]) -> dict[str, Any]:
@@ -212,6 +228,27 @@ def _event_segments(event_data: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _forward_ids_from_event(event_data: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    for segment in _event_segments(event_data):
+        if segment.get("type") == "forward":
+            forward_id = segment.get("data", {}).get("id")
+            if forward_id:
+                ids.append(str(forward_id))
+
+    raw = event_data.get("raw_message")
+    if isinstance(raw, str):
+        ids.extend(re.findall(r"\[CQ:forward,[^\]]*id=([^,\]]+)", raw))
+
+    unique = []
+    seen = set()
+    for forward_id in ids:
+        if forward_id not in seen:
+            unique.append(forward_id)
+            seen.add(forward_id)
+    return unique
+
+
 def _plain_text_from_event(event_data: dict[str, Any]) -> str:
     raw = event_data.get("raw_message")
     if isinstance(raw, str):
@@ -253,8 +290,71 @@ def _archive_event_payload(event_data: dict[str, Any]) -> ArchivedMessage:
         segments=_event_segments(event_data),
         sender=sender,
         event=event_data,
-        received_at=utc_now(),
+        received_at=_received_at_from_event(event_data),
     )
+
+
+def _received_at_from_event(event_data: dict[str, Any]) -> str:
+    timestamp = event_data.get("time")
+    if isinstance(timestamp, (int, float)) and timestamp > 0:
+        return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+    return utc_now()
+
+
+def _forward_child_event(
+    message: dict[str, Any],
+    forward_id: str,
+    parent_message_id: str,
+) -> dict[str, Any]:
+    event = dict(message)
+    event["message_id"] = f"forward:{forward_id}:{message.get('message_id') or message.get('message_seq') or hash(str(message))}"
+    event.setdefault("post_type", "message")
+    event["qqbot_archive"] = {
+        "source": "forward",
+        "forward_id": forward_id,
+        "parent_message_id": parent_message_id,
+    }
+    return event
+
+
+async def _expand_and_store_forward_messages(
+    event_data: dict[str, Any],
+    parent_message_id: str,
+    parent_row_id: int | None,
+) -> int:
+    if not config.expand_forward_messages or not onebot_http.enabled:
+        return 0
+
+    saved = 0
+    for forward_id in _forward_ids_from_event(event_data):
+        try:
+            messages = await onebot_http.get_forward_msg(forward_id)
+        except Exception as exc:
+            logger.exception("forward message expansion failed: %s", forward_id)
+            await store.save_reaction(
+                parent_row_id,
+                "forward_expand",
+                "get_forward_msg",
+                "error",
+                error=f"{forward_id}: {exc}",
+            )
+            continue
+
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            archived = _archive_event_payload(_forward_child_event(message, forward_id, parent_message_id))
+            await store.save_message(archived)
+            saved += 1
+
+        await store.save_reaction(
+            parent_row_id,
+            "forward_expand",
+            "get_forward_msg",
+            "saved",
+            response=f"{forward_id}: {saved} messages",
+        )
+    return saved
 
 
 def _archive_message(event: MessageEvent) -> ArchivedMessage:
@@ -293,6 +393,7 @@ message_handler = on_message(priority=10, block=False)
 async def handle_message(bot: Bot, event: MessageEvent) -> None:
     archived = _archive_message(event)
     row_id = await store.save_message(archived)
+    await _expand_and_store_forward_messages(_event_dict(event), archived.message_id, row_id)
     logger.info(
         "saved message id=%s type=%s user=%s group=%s",
         archived.message_id,

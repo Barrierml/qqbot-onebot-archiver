@@ -6,6 +6,7 @@ It is extracted from the QQ-facing part of `Barrierml/my-agent`, but keeps only:
 
 - read OneBot v11 messages from NapCat or another OneBot implementation
 - save every message into SQLite
+- expand merged forward messages through OneBot `get_forward_msg`
 - react with built-in commands, keyword rules, or an optional webhook
 
 ## Quick Start
@@ -31,6 +32,10 @@ All runtime configuration uses environment variables.
 | `QQBOT_PORT` | `8080` | NoneBot server port |
 | `QQBOT_ONEBOT_WS_URLS` | empty | Comma-separated reverse/client WebSocket URLs |
 | `QQBOT_ONEBOT_ACCESS_TOKEN` | empty | OneBot access token when not embedded in URL |
+| `QQBOT_ONEBOT_HTTP_URL` | empty | OneBot HTTP API base URL, e.g. `http://napcat:3000` |
+| `QQBOT_ONEBOT_HTTP_ACCESS_TOKEN` | `QQBOT_ONEBOT_ACCESS_TOKEN` | OneBot HTTP API token |
+| `QQBOT_ONEBOT_HTTP_TIMEOUT` | `10` | OneBot HTTP API timeout seconds |
+| `QQBOT_EXPAND_FORWARD_MESSAGES` | `true` | Expand `[CQ:forward,id=...]` messages and archive child messages |
 | `QQBOT_NICKNAMES` | `qqbot` | Comma-separated bot nicknames |
 | `QQBOT_SUPERUSERS` | empty | Comma-separated QQ IDs allowed to run admin commands |
 | `QQBOT_DATA_DIR` | `./data` | SQLite and runtime data directory |
@@ -73,7 +78,6 @@ Webhook response can be:
 ## Docker
 
 ```bash
-docker build -t qqbot:0.1.0 .
+docker build -t qqbot:0.1.3 .
 docker compose -f deploy/docker-compose.yml up -d
 ```
-

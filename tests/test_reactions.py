@@ -22,6 +22,10 @@ def make_config(tmp_path: Path, **overrides) -> BotConfig:
         port=8080,
         onebot_ws_urls=[],
         onebot_access_token="",
+        onebot_http_url="",
+        onebot_http_access_token="",
+        onebot_http_timeout=1.0,
+        expand_forward_messages=True,
         nicknames=["qqbot"],
         superusers={"1"},
         data_dir=tmp_path,
@@ -108,4 +112,3 @@ async def test_recent_is_superuser_only(tmp_path):
 
     assert denied[0].reply == "permission denied"
     assert "hello" in allowed[0].reply
-

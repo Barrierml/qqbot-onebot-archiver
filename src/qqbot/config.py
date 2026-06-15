@@ -26,6 +26,10 @@ class BotConfig:
     port: int
     onebot_ws_urls: list[str]
     onebot_access_token: str
+    onebot_http_url: str
+    onebot_http_access_token: str
+    onebot_http_timeout: float
+    expand_forward_messages: bool
     nicknames: list[str]
     superusers: set[str]
     data_dir: Path
@@ -58,6 +62,13 @@ class BotConfig:
             port=int(os.getenv("QQBOT_PORT", "8080")),
             onebot_ws_urls=_csv(os.getenv("QQBOT_ONEBOT_WS_URLS")),
             onebot_access_token=os.getenv("QQBOT_ONEBOT_ACCESS_TOKEN", ""),
+            onebot_http_url=os.getenv("QQBOT_ONEBOT_HTTP_URL", "").rstrip("/"),
+            onebot_http_access_token=os.getenv(
+                "QQBOT_ONEBOT_HTTP_ACCESS_TOKEN",
+                os.getenv("QQBOT_ONEBOT_ACCESS_TOKEN", ""),
+            ),
+            onebot_http_timeout=float(os.getenv("QQBOT_ONEBOT_HTTP_TIMEOUT", "10")),
+            expand_forward_messages=_bool("QQBOT_EXPAND_FORWARD_MESSAGES", True),
             nicknames=_csv(os.getenv("QQBOT_NICKNAMES")) or ["qqbot"],
             superusers=set(_csv(os.getenv("QQBOT_SUPERUSERS"))),
             data_dir=data_dir,
@@ -84,4 +95,3 @@ def load_config() -> BotConfig:
 def set_config(config: BotConfig) -> None:
     global _config
     _config = config
-
