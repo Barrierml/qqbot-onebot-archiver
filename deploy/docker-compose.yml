@@ -2,7 +2,7 @@ services:
   qqbot:
     build:
       context: ..
-    image: qqbot:0.1.3
+    image: qqbot:0.1.4
     container_name: qqbot
     restart: unless-stopped
     environment:

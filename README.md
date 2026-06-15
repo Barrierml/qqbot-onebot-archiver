@@ -78,6 +78,6 @@ Webhook response can be:
 ## Docker
 
 ```bash
-docker build -t qqbot:0.1.3 .
+docker build -t qqbot:0.1.4 .
 docker compose -f deploy/docker-compose.yml up -d
 ```

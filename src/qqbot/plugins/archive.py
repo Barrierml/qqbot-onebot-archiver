@@ -68,8 +68,8 @@ if hasattr(driver, "server_app"):
         }
 
     @app.get("/api/messages")
-    async def api_messages(limit: int = 50) -> dict[str, Any]:
-        return {"ok": True, "messages": await store.recent_messages(limit)}
+    async def api_messages(limit: int = 50, full: bool = False) -> dict[str, Any]:
+        return {"ok": True, "messages": await store.recent_messages(limit, full=full)}
 
     @app.get("/api/reactions")
     async def api_reactions(limit: int = 50) -> dict[str, Any]:

@@ -134,13 +134,19 @@ class MessageStore:
             )
             await db.commit()
 
-    async def recent_messages(self, limit: int = 10) -> list[dict[str, Any]]:
+    async def recent_messages(self, limit: int = 10, full: bool = False) -> list[dict[str, Any]]:
         limit = max(1, min(limit, 50))
+        columns = "message_id, message_type, user_id, group_id, plain_text, received_at"
+        if full:
+            columns = (
+                "message_id, self_id, message_type, sub_type, user_id, group_id, "
+                "plain_text, raw_message, segments_json, sender_json, event_json, received_at"
+            )
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                """
-                SELECT message_id, message_type, user_id, group_id, plain_text, received_at
+                f"""
+                SELECT {columns}
                 FROM messages
                 ORDER BY received_at DESC, id DESC
                 LIMIT ?
@@ -148,7 +154,15 @@ class MessageStore:
                 (limit,),
             ) as cursor:
                 rows = await cursor.fetchall()
-                return [dict(row) for row in rows]
+                result = [dict(row) for row in rows]
+                if full:
+                    for row in result:
+                        for key in ("segments_json", "sender_json", "event_json"):
+                            try:
+                                row[key.removesuffix("_json")] = json.loads(row.pop(key))
+                            except (json.JSONDecodeError, TypeError):
+                                row[key.removesuffix("_json")] = None
+                return result
 
     async def recent_reactions(self, limit: int = 20) -> list[dict[str, Any]]:
         limit = max(1, min(limit, 100))
