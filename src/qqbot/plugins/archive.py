@@ -5,6 +5,7 @@ from typing import Any
 from nonebot import get_driver, on_message
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent
 from nonebot.log import logger
+from starlette.responses import HTMLResponse
 
 from qqbot.config import load_config
 from qqbot.reactions import ReactionEngine
@@ -41,6 +42,10 @@ class HttpEventContext:
 if hasattr(driver, "server_app"):
     app = driver.server_app
 
+    @app.get("/")
+    async def index() -> HTMLResponse:
+        return HTMLResponse(_render_index())
+
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:
         return {
@@ -51,6 +56,20 @@ if hasattr(driver, "server_app"):
             "webhook_enabled": bool(config.reaction_webhook),
             "rules": len(config.rules),
         }
+
+    @app.get("/api/messages")
+    async def api_messages(limit: int = 50) -> dict[str, Any]:
+        return {"ok": True, "messages": await store.recent_messages(limit)}
+
+    @app.get("/api/reactions")
+    async def api_reactions(limit: int = 50) -> dict[str, Any]:
+        return {"ok": True, "reactions": await store.recent_reactions(limit)}
+
+    @app.get("/messages")
+    async def messages_page(limit: int = 50) -> HTMLResponse:
+        messages = await store.recent_messages(limit)
+        reactions = await store.recent_reactions(20)
+        return HTMLResponse(_render_messages(messages, reactions))
 
     async def ingest_http_event(payload: dict[str, Any]) -> dict[str, Any]:
         archived = _archive_event_payload(payload)
@@ -85,6 +104,105 @@ def _event_dict(event: MessageEvent) -> dict[str, Any]:
     if hasattr(event, "dict"):
         return event.dict()
     return {}
+
+
+def _html_escape(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#x27;")
+    )
+
+
+def _page(title: str, body: str) -> str:
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{_html_escape(title)}</title>
+  <style>
+    :root {{ color-scheme: light dark; }}
+    body {{ margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f7f7f4; color: #191917; }}
+    header {{ padding: 18px 24px; border-bottom: 1px solid #ddd9cf; background: #ffffff; position: sticky; top: 0; }}
+    main {{ padding: 20px 24px 40px; max-width: 1180px; }}
+    a {{ color: #175ddc; text-decoration: none; }}
+    .meta {{ color: #6b665c; font-size: 12px; }}
+    .grid {{ display: grid; gap: 14px; }}
+    table {{ border-collapse: collapse; width: 100%; background: #fff; border: 1px solid #ddd9cf; }}
+    th, td {{ padding: 9px 10px; border-bottom: 1px solid #ebe7de; vertical-align: top; text-align: left; }}
+    th {{ background: #f0eee8; font-weight: 650; white-space: nowrap; }}
+    td.message {{ max-width: 520px; white-space: pre-wrap; word-break: break-word; }}
+    .pill {{ display: inline-block; padding: 2px 7px; border: 1px solid #cfc8b8; border-radius: 999px; font-size: 12px; background: #faf9f4; }}
+    @media (prefers-color-scheme: dark) {{
+      body {{ background: #151515; color: #eee; }}
+      header, table {{ background: #1f1f1f; border-color: #3a3a3a; }}
+      th {{ background: #2a2a2a; }}
+      th, td {{ border-color: #343434; }}
+      .meta {{ color: #aaa; }}
+      .pill {{ background: #242424; border-color: #555; }}
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <strong>qqbot</strong>
+    <span class="meta"> / <a href="/messages">messages</a> / <a href="/healthz">healthz</a> / <a href="/api/messages">api</a></span>
+  </header>
+  <main>{body}</main>
+</body>
+</html>"""
+
+
+def _render_index() -> str:
+    body = """
+    <div class="grid">
+      <p>QQ/OneBot message archiver and reaction bot is running.</p>
+      <p><a href="/messages">查看最近聊天记录</a></p>
+    </div>
+    """
+    return _page("qqbot", body)
+
+
+def _render_messages(messages: list[dict[str, Any]], reactions: list[dict[str, Any]]) -> str:
+    message_rows = "\n".join(
+        f"""<tr>
+          <td class="meta">{_html_escape(row.get("received_at"))}</td>
+          <td><span class="pill">{_html_escape(row.get("message_type"))}</span></td>
+          <td>{_html_escape(row.get("group_id") or row.get("user_id"))}</td>
+          <td class="message">{_html_escape(row.get("plain_text"))}</td>
+        </tr>"""
+        for row in messages
+    ) or '<tr><td colspan="4" class="meta">暂无消息</td></tr>'
+    reaction_rows = "\n".join(
+        f"""<tr>
+          <td class="meta">{_html_escape(row.get("created_at"))}</td>
+          <td>{_html_escape(row.get("rule_name"))}</td>
+          <td>{_html_escape(row.get("status"))}</td>
+          <td class="message">{_html_escape(row.get("response") or row.get("error") or "")}</td>
+        </tr>"""
+        for row in reactions
+    ) or '<tr><td colspan="4" class="meta">暂无反应记录</td></tr>'
+    body = f"""
+    <section>
+      <h2>最近消息</h2>
+      <table>
+        <thead><tr><th>时间</th><th>类型</th><th>来源</th><th>内容</th></tr></thead>
+        <tbody>{message_rows}</tbody>
+      </table>
+    </section>
+    <section style="margin-top: 28px;">
+      <h2>最近反应</h2>
+      <table>
+        <thead><tr><th>时间</th><th>规则</th><th>状态</th><th>响应/错误</th></tr></thead>
+        <tbody>{reaction_rows}</tbody>
+      </table>
+    </section>
+    """
+    return _page("qqbot messages", body)
 
 
 def _event_segments(event_data: dict[str, Any]) -> list[dict[str, Any]]:

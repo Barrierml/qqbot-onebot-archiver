@@ -150,3 +150,29 @@ class MessageStore:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
 
+    async def recent_reactions(self, limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 100))
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT
+                    reactions.created_at,
+                    reactions.rule_name,
+                    reactions.action,
+                    reactions.status,
+                    reactions.response,
+                    reactions.error,
+                    messages.message_type,
+                    messages.user_id,
+                    messages.group_id,
+                    messages.plain_text
+                FROM reactions
+                LEFT JOIN messages ON messages.id = reactions.message_row_id
+                ORDER BY reactions.created_at DESC, reactions.id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
